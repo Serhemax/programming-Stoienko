@@ -2,7 +2,7 @@
  * @file lib.c
  * @brief 
  *
- * @author Davydov V.
+ * @author Stoienko Srhii
  * @date 14-apr-2020
  * @version 1.3
  */

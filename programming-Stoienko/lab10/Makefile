@@ -1,40 +1,103 @@
 CC = clang
-LAB_OPTS = -I./src src/lib.c
-C_OPTS = $(MAC_OPTS) -std=gnu11 -g -Wall -Wextra -Werror -Wformat-security -Wfloat-equal -Wshadow -Wconversion -Wlogical-not-parentheses -Wnull-dereference -Wno-unused-variable -Werror=vla $(LAB_OPTS)
+LAB_OPTS = -I./module-library/src module-library/src/lib.c 
+LIB_H = -I./module-library/src
+C_OPTS = -std=gnu11 -g -lm -Wall -Wextra -Werror -Wformat-security -Wfloat-equal -Wshadow -Wconversion -Wlogical-not-parentheses -Wnull-dereference -Wno-unused-variable -Werror=vla $(LAB_OPTS)
+V_FLAGS=--tool=memcheck --leak-check=full --show-reachable=yes --undef-value-errors=yes --track-origins=no --child-silent-after-fork=no --trace-children=no --error-exitcode=1
+DOCG = doxygen
+DOC = Doxyfile
 
-all: clean prep compile check doxygen
+compile_all: clean prep main.bin test.bin
 
-all_doxygen: clean_doxygen doxygen
 
 clean:
-	rm -rf dist
-	
-clean_doxygen:
-	rm -rf ./dist/html
-	rm -rf ./dist/latex
-doxygen: 
-	doxygen main.c
-	
+	rm -rf ./dist
 prep:
-	mkdir dist
-	
-doxygen: 
-	doxygen doxyfile
-	
-compile: main.bin test.bin
-test.bin: test/test.c
-	$(CC) $(C_OPTS) $< -fprofile-instr-generate -fcoverage-mapping -o ./dist/$@ -lcheck
-test: clean prep compile
-	LLVM_PROFILE_FILE="dist/test.profraw" ./dist/test.bin
-	llvm-profdata merge -sparse dist/test.profraw -o dist/test.profdata
-	llvm-cov report dist/test.bin -instr-profile=dist/test.profdata src/*.c
-	llvm-cov show dist/test.bin -instr-profile=dist/test.profdata src/*.c --format html > dist/coverage.html
+	mkdir ./dist
+compile: clean prep main.bin
 
-main.bin: src/main.c
+main.bin: module-main/src/main.c
 	$(CC) $(C_OPTS) $< -o ./dist/$@
-run: clean prep compile
-	./dist/main.bin
 check:
-	clang-format --verbose -dry-run --Werror src/*
-	clang-tidy src/*.c  -checks=-readability-uppercase-literal-suffix,-readability-magic-numbers,-clang-analyzer-deadcode.DeadStores,-clang-analyzer-security.insecureAPI.rand
-	rm -rf src/*.dump
+	clang-format --verbose -dry-run --Werror src/* module-library/test/*
+	$(CLANG_PREFIX)clang-tidy src/*.c  -checks=-readability-uppercase-literal-suffix,-readability-magic-numbers,-clang-analyzer-deadcode.DeadStores,-clang-analyzer-security.insecureAPI.rand
+	cppcheck --enable=all --inconclusive --addon=cert --error-exitcode=1  -v --suppress=unreadVariable:*/main.c --suppress=knownConditionTrueFalse:*/main.c --suppress=missingIncludeSystem  --check-config --suppress=*:*/test.c  --suppress=unmatchedSuppression:*/main.c .
+	rm -rf src/*.dump test/*.dump
+leak-check: clean prep compile
+	valgrind $(V_FLAGS) --log-file=dist/valgrind.log --xml-file=dist/valgrind.xml --xml=yes dist/main.bin
+	valgrind $(V_FLAGS) --log-file=dist/valgrind.log --xml-file=dist/valgrind.xml --xml=yes dist/test.bin
+
+
+clean_doxy:
+	rm -rf ./dist/html
+	rm -rf ./dist/latex 
+Doxygen:
+	$(DOCG) $(DOC)
+	
+compile_doxy: clean_doxy Doxygen
+
+
+
+
+compile_test: clean prep test.bin
+
+test.bin:module-library/test/test.c
+	 $(CC) $(C_OPTS) $< -fprofile-instr-generate -fcoverage-mapping -lsubunit  -o ./dist/$@ -lcheck 
+test: prep compile_2
+		LLVM_PROFILE_FILE="dist/test.profraw" ./dist/test.bin
+		llvm-profdata merge -sparse dist/test.profraw -o dist/test.profdata
+		llvm-cov report dist/test.bin -instr-profile=dist/test.profdata src/*.c
+		llvm-cov show dist/test.bin -instr-profile=dist/test.profdata src/*.c --format html > dist/coverage.html
+	
+	
+	
+dynamic_lib.o:module-library/src/lib.c
+	$(CC) -c -fPIC $< -o ./dist/$@
+
+dynamic_lib.h.gch:module-library/src/lib.h
+	$(CC) -c -fPIC $< -o ./dist/$@ 
+
+dynamic_main.o:module-main/src/main.c
+	$(CC) $(LIB_H) -c $< -o ./dist/$@
+
+dynamic_lib_lab10:
+	$(CC) -shared dist/dynamic_lib.o dist/dynamic_lib.h.gch -o lib_lab10.so  
+
+compile_dynamic_lib:clean prep dynamic_lib.o dynamic_lib.h.gch dynamic_main.o dynamic_lib_lab10
+
+clean_dynamic_OBJ:
+	rm -rf ./dist/dynamic_main.o
+	rm -rf ./dist/dynamic_lib.h.gch
+	rm -rf ./dist/dynamic_lib.o
+
+dynamic_main.bin:	
+	$(CC) -o ./dist/dynamic_main.bin dist/dynamic_main.o -L. -l_lab10 -rpath -Wl
+
+dynamic_test.bin:
+	$(CC) $(C_OPTS) module-library/test/test.c -L. -l_lab10 -rpath -Wl $< -fprofile-instr-generate -fcoverage-mapping -lsubunit -o ./dist/dynamic_test.bin -lcheck
+
+	
+
+
+
+static_lib.o:module-library/src/lib.c
+	$(CC) -c $< -o ./dist/$@
+static_lib.h.o:module-library/src/lib.h
+	$(CC) -c $< -o ./dist/$@ 
+static_main.o:module-main/src/main.c
+	$(CC) $(LIB_H) -c $< -o ./dist/$@
+static_lib_lab10:
+	ar rc lib_Lab_10.a src/lib.o src/lib.h.gch
+	ranlib lib_Lab_10.a
+
+static_main.bin: clean prep	
+	$(CC) dist/main.o -L. -l_Lab_10 $< -o ./dist/satic_main.bin
+	
+static_test.bin: 
+	$(CC) $(C_OPTS) src/main.c -L. -l_Lab_10 $< -fprofile-instr-generate -fcoverage-mapping -lsubunit -o ./dist/static_test.bin -lcheck
+
+clean_static_OBJ:
+	rm -rf ./dist/static_lib.o
+	rm -rf ./dist/static_lib.h.o
+	rm -rf ./dist/static_main.o
+
+compile_static_lib: clean prep static_lib.o static_lib.h.o static_main.o static_lib_lab10 
